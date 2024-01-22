@@ -18,7 +18,7 @@ ctrlc = {version = "3", features = ["termination"]}
 egui = "0.15"
 generational-arena = "0.2.8"
 glam = {features = ["mint", "serde", "approx"], version = "0.23"}
-gltf = {version = "1.0", features = ["KHR_lights_punctual", "KHR_materials_unlit", "names", "utils"], default-features = false}
+gltf = {version = "1.0", features = ["KHR_lights_punctual", "KHR_materials_unlit", "names", "utils", "extras"], default-features = false}
 half = "2.1.0"
 hecs = "0.10.1"
 hotham-asset-client = {path = "../hotham-asset-client"}
@@ -35,6 +35,7 @@ openxr = {features = ["loaded", "mint"], version = "0.17"}
 rapier3d = "0.17"
 ruzstd = "0.3"
 serde = {version = "1.0", features = ["derive"]}
+serde_json = "1.0"
 symphonia = {version = "0.5", default-features = false, features = ["mp3"]}
 thiserror = "1.0"
 tokio = {version = "1.0.1", default-features = false, features = ["rt"]}

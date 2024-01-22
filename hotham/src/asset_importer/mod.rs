@@ -19,6 +19,8 @@ use gltf::Document;
 use hecs::{Entity, World};
 use itertools::Itertools;
 use rapier3d::prelude::{ActiveCollisionTypes, Group};
+use serde::Deserialize;
+use serde_json;
 use std::{borrow::Cow, collections::HashMap, convert::TryInto};
 
 use self::scene::Scene;
@@ -297,6 +299,42 @@ fn load_node(
     this_entity
 }
 
+#[derive(Deserialize,Debug,PartialEq)]
+enum ColliderOption {
+    #[serde(rename = "wall")]
+    Wall,
+
+    #[serde(rename = "sensor")]
+    Sensor,
+}
+#[derive(Deserialize,Debug,Default)]
+struct Extras {
+    collider: Option<ColliderOption>,
+
+    #[serde(deserialize_with = "deserialize_bool")]
+    hull: Option<bool>,
+}
+
+fn deserialize_bool<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s: &str = serde::Deserialize::deserialize(deserializer)?;
+
+    match s {
+        "true" | "t" | "T" => Ok(Some(true)),
+        "false" | "f" | "F" => Ok(Some(false)),
+        _ => Err(serde::de::Error::unknown_variant(s, &["true", "false"])),
+    }
+}
+
+fn get_extras(node: &gltf::Node) -> Extras {
+    node.extras().as_ref().and_then(|extras| -> Option<Extras> {
+        println!("[REVERB] get_extras: {}", extras.get());
+        serde_json::from_str::<Extras>(extras.get()).ok()
+    }).unwrap_or(Extras::default())
+}
+
 /// Searches through the glTF document to find a mesh that can be used by Hotham to represent a collider, then creates one.
 ///
 /// There are two kinds of colliders we're looking for:
@@ -309,10 +347,13 @@ fn get_collider_for_node(
 ) -> Option<Collider> {
     // First, get the name of the node, if it has one.
     let node_name = node.name()?;
+    let extras = get_extras(node);
+
+    println!("[REVERB] {}.extras = {:?}", node_name, extras);
 
     // Next, check to see if this is either a node that should be treated as a sensor
     // OR a node that has another node representing a wall collider somewhere in the document.
-    let (collider_node_name, mesh) = if node_name.ends_with(SENSOR_COLLIDER_TAG) {
+    let (collider_node_name, mesh) = if node_name.ends_with(SENSOR_COLLIDER_TAG) || extras.collider.is_some() {
         (node_name, node.mesh()?)
     } else {
         find_wall_collider_for_node(node_name, import_context)?
@@ -320,10 +361,10 @@ fn get_collider_for_node(
 
     // Build a collider using the mesh.
     println!("[HOTHAM_ASSET_IMPORTER] Getting shape for {collider_node_name}");
-    let shape = get_shape_from_mesh(mesh, import_context);
+    let shape = get_shape_from_mesh(mesh, import_context, extras.hull.unwrap_or(true));
 
     // If this is a wall collider, ensure it's not a sensor.
-    let collider = if collider_node_name.ends_with(WALL_COLLIDER_TAG) {
+    let collider = if collider_node_name.ends_with(WALL_COLLIDER_TAG) || extras.collider == Some(ColliderOption::Wall) {
         println!("[HOTHAM_ASSET_IMPORTER] Created wall collider for model {collider_node_name}");
         Collider {
             sensor: false,
@@ -368,6 +409,7 @@ fn find_wall_collider_for_node<'a>(
 fn get_shape_from_mesh(
     mesh: gltf::Mesh,
     import_context: &ImportContext,
+    hull: bool,
 ) -> rapier3d::geometry::SharedShape {
     let mut positions = Vec::new();
     let mut indices: Vec<[u32; 3]> = Default::default();
@@ -393,17 +435,21 @@ fn get_shape_from_mesh(
         }
     }
 
-    println!(
-        "[HOTHAM_ASSET_IMPORTER] Attempting to create convex mesh from {:?} positions",
-        positions.len()
-    );
+    if hull {
+        println!("[HOTHAM_ASSET_IMPORTER] Attempting to create convex mesh from {:?} positions", positions.len());
 
-    rapier3d::geometry::SharedShape::convex_mesh(positions.clone(), &indices).unwrap_or_else(|| {
-        println!(
-            "[HOTHAM_ASSET_IMPORTER] ERROR! Unable to create convex mesh, attempting decomposition"
-        );
-        rapier3d::geometry::SharedShape::convex_decomposition(&positions, &indices)
-    })
+        // calculate convex full from point data
+        rapier3d::geometry::SharedShape::convex_mesh(positions.clone(), &indices).unwrap_or_else(|| {
+            println!(
+                "[HOTHAM_ASSET_IMPORTER] ERROR! Unable to create convex mesh, attempting decomposition"
+            );
+            rapier3d::geometry::SharedShape::convex_decomposition(&positions, &indices)
+        })
+    } else {
+        println!("[HOTHAM_ASSET_IMPORTER] trimesh from {:?}", positions.len());
+        // return original mesh as trimesh collider
+        rapier3d::geometry::SharedShape::trimesh(positions.clone(), indices)
+    }
 }
 
 /// Recursively walk through this node's hierarchy and connect child nodes to their parents by adding a [`Parent`] component.
